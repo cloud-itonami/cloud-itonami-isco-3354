@@ -1,0 +1,164 @@
+(ns govlicensing.governor-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [govlicensing.store :as store]
+            [govlicensing.advisor :as advisor]
+            [govlicensing.governor :as governor]))
+
+(defn- fresh-store []
+  (let [st (store/mem-store)]
+    (store/register-office! st {:office-id "office-1" :name "City Business Licensing Office"
+                                :max-supply-cost 500})
+    (store/register-application! st {:application-id "APP-1" :office-id "office-1"
+                                     :applicant-name "Aya Tanaka" :license-type "food-service"})
+    st))
+
+(def ^:private req {:office-id "office-1"})
+
+(defn- log-op [application-id]
+  {:op :log-application-record :effect :propose :application-id application-id
+   :status :intake :confidence 0.9 :stake :low
+   :rationale "proposed logging an intake record"})
+
+(defn- schedule-op [application-id]
+  {:op :schedule-review-appointment :effect :propose :application-id application-id
+   :appointment-time "2026-08-01T09:00" :confidence 0.9 :stake :low
+   :rationale "proposed a licensing-review appointment scheduling proposal"})
+
+(defn- flag-op [application-id concern-category]
+  {:op :flag-licensing-review :effect :propose :application-id application-id
+   :concern-category concern-category :confidence 0.9 :stake :low
+   :rationale "flags an application for human licensing-official review; never issues, denies, renews or revokes any license or permit"})
+
+(defn- supply-op [cost]
+  {:op :coordinate-supply-order :effect :propose
+   :item "application forms" :cost cost :confidence 0.9 :stake :low
+   :rationale "proposed a supply order"})
+
+(deftest ok-log-application-record-on-registered-application
+  (let [st (fresh-store)
+        v (governor/check req {} (log-op "APP-1") st)]
+    (is (:ok? v))
+    (is (not (:hard? v)))
+    (is (not (:escalate? v)))))
+
+(deftest ok-schedule-review-appointment-for-registered-application
+  (let [st (fresh-store)
+        v (governor/check req {} (schedule-op "APP-1") st)]
+    (is (:ok? v))))
+
+(deftest hard-on-unregistered-office
+  (let [st (fresh-store)
+        v (governor/check {:office-id "ghost-office"} {} (log-op "APP-1") st)]
+    (is (:hard? v))
+    (is (some #(= :no-office (:rule %)) (:violations v)))))
+
+(deftest hard-on-no-actuation-violation
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (log-op "APP-1") :effect :direct-write) st)]
+    (is (:hard? v))
+    (is (some #(= :no-actuation (:rule %)) (:violations v)))))
+
+(deftest hard-on-op-not-in-closed-allowlist
+  (testing "an op that issues, denies, renews or revokes a license or
+            permit is never a member of the closed allowlist -- it is
+            structurally absent, and unconditionally hard-blocked if it
+            ever appears"
+    (let [st (fresh-store)]
+      (doseq [op [:issue-license :deny-license-application :revoke-license
+                  :renew-license :grant-license :approve-license-application
+                  :suspend-license :reject-license-application]]
+        (let [v (governor/check req {} {:op op :effect :propose :application-id "APP-1"
+                                        :confidence 0.99 :stake :low :rationale "n/a"} st)]
+          (is (:hard? v) (str op " should hard-block"))
+          (is (some #(= :op-not-allowed (:rule %)) (:violations v))
+              (str op " should be flagged :op-not-allowed")))))))
+
+(deftest hard-on-unknown-application
+  (let [st (fresh-store)
+        v (governor/check req {} (log-op "APP-ghost") st)]
+    (is (:hard? v))
+    (is (some #(= :unknown-application (:rule %)) (:violations v)))))
+
+(deftest hard-on-application-wrong-office
+  (let [st (fresh-store)]
+    (store/register-office! st {:office-id "office-2" :name "Branch Licensing Office"
+                                :max-supply-cost 300})
+    (store/register-application! st {:application-id "APP-2" :office-id "office-2"
+                                     :applicant-name "Other Applicant" :license-type "retail"})
+    (let [v (governor/check req {} (log-op "APP-2") st)]
+      (is (:hard? v))
+      (is (some #(= :application-wrong-office (:rule %)) (:violations v))))))
+
+(deftest hard-on-finalization-language-regardless-of-op
+  (testing "a proposal whose rationale describes actually TAKING a
+            licensing-decision action is a hard, permanent block no
+            matter which op it is nominally filed under -- this is the
+            defense-in-depth check on top of the closed allowlist"
+    (let [st (fresh-store)]
+      (doseq [rationale ["let's issue the license to this applicant"
+                         "recommend we deny the license application today"
+                         "ready to revoke the license"
+                         "we should renew the license without further review"
+                         "time to grant a license to this business"]]
+        (let [v (governor/check req {} (assoc (log-op "APP-1") :confidence 0.99 :rationale rationale) st)]
+          (is (:hard? v) rationale)
+          (is (some #(= :finalization-language-blocked (:rule %)) (:violations v)) rationale))))))
+
+(deftest always-escalates-flag-licensing-review-even-at-high-confidence
+  (testing "surfacing an application for licensing review is never
+            auto-commit-eligible"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (flag-op "APP-1" :new-application) :confidence 0.99) st)]
+      (is (not (:hard? v)))
+      (is (:escalate? v))
+      (is (not (:ok? v))))))
+
+(deftest ok-at-exact-supply-cost-ceiling-boundary
+  (testing "the supply-cost ceiling is inclusive"
+    (let [st (fresh-store)
+          v (governor/check req {} (supply-op 500) st)]
+      (is (:ok? v)))))
+
+(deftest escalates-over-supply-cost-ceiling-even-at-high-confidence
+  (testing "a supply order above the office's registered cost ceiling
+            always requires human sign-off"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (supply-op 5000) :confidence 0.99) st)]
+      (is (not (:hard? v)))
+      (is (:escalate? v)))))
+
+(deftest escalates-low-confidence
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (log-op "APP-1") :confidence 0.3) st)]
+    (is (not (:hard? v)))
+    (is (:escalate? v))))
+
+(deftest never-self-trips-on-default-mock-advisor-proposals
+  (testing "the mock advisor's own default rationale for every allowed op
+            -- including :flag-licensing-review, which necessarily
+            disclaims issuing/denying/renewing/revoking a license or
+            permit -- never triggers the finalization-language hard
+            block. Regression test for the known self-tripping bug
+            pattern: scope-exclusion terms must be phrased as the
+            finalize-ACTION, not the bare topic noun."
+    (let [st (fresh-store)
+          adv (advisor/mock-advisor)
+          requests [{:office-id "office-1" :op :log-application-record :application-id "APP-1"
+                     :status :intake :stake :low}
+                    {:office-id "office-1" :op :log-application-record :application-id "APP-1"
+                     :status :renewal :stake :low}
+                    {:office-id "office-1" :op :schedule-review-appointment :application-id "APP-1"
+                     :appointment-time "2026-08-01T09:00" :stake :low}
+                    {:office-id "office-1" :op :flag-licensing-review :application-id "APP-1"
+                     :concern-category :new-application :stake :low}
+                    {:office-id "office-1" :op :flag-licensing-review :application-id "APP-1"
+                     :concern-category :renewal :stake :low}
+                    {:office-id "office-1" :op :flag-licensing-review :application-id "APP-1"
+                     :concern-category :compliance-issue :stake :low}
+                    {:office-id "office-1" :op :coordinate-supply-order
+                     :item "application forms" :cost 100 :stake :low}]]
+      (doseq [request requests]
+        (let [proposal (advisor/-advise adv st request)
+              v (governor/check request {} proposal st)]
+          (is (not (:hard? v))
+              (str request " -> proposal " proposal " unexpectedly hard-blocked: " (:violations v))))))))
