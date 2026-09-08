@@ -72,7 +72,7 @@
                                 outright — it may be a legitimate one-off
                                 purchase).
     8. low confidence (< `confidence-floor`)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [govlicensing.store :as store]))
 
 (def confidence-floor 0.6)
@@ -110,7 +110,7 @@
   licensing-decision action (issuing, denying, renewing or revoking a
   license or permit), never merely mentioning the topic."
   [proposal]
-  (let [text (str/lower-case (str (:rationale proposal)))]
+  (let [text (str/lower (str (:rationale proposal)))]
     (boolean (some #(str/includes? text %) finalization-phrases))))
 
 (defn- hard-violations [{:keys [request proposal]} office-record basis-record]
