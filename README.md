@@ -23,7 +23,7 @@ See "Robotics premise" and "No licensing-decision authority" below.
 (ADR-2607011000 / ADR-2607121000): `:intake -> :advise -> :govern -> :decide
 -+-> :commit (:ok?) +-> :request-approval (:escalate?, human-in-the-loop
 interrupt) +-> :hold (:hard?)`. 18 tests / 68 assertions green
-(`clojure -M:test`).
+(`kbb -M:test`).
 
 HARD invariants (always hold, never overridable): office provenance (the
 requesting office must be independently verified/registered before any
