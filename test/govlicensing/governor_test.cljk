@@ -1,5 +1,5 @@
 (ns govlicensing.governor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [govlicensing.store :as store]
             [govlicensing.advisor :as advisor]
             [govlicensing.governor :as governor]))
