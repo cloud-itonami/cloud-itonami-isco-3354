@@ -1,7 +1,7 @@
 (ns govlicensing.actor
   "LicensingCoordinationActor — the ISCO-08 3354 independent government
   licensing coordination actor as a `langgraph.graph/state-graph`
-  (ADR-2607011000 / ADR-2607121000 / CLAUDE.md Actors section). One graph
+  (ADR-2607011000 / ADR-2607121000 / AGENTS.md Actors section). One graph
   run = one documentation/logistics-coordination operation request (intake
   -> advise -> govern -> decide -> commit/hold, with a human-approval
   interrupt for escalated proposals). No infinite internal loop;
