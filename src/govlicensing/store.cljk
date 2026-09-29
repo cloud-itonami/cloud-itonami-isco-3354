@@ -1,7 +1,7 @@
 (ns govlicensing.store
   "SSoT for the ISCO-08 3354 independent government licensing coordination
   practice actor (itonami actor pattern, ADR-2607011000 / ADR-2607121000 /
-  CLAUDE.md Actors section; README's 'Robotics premise' -- a documentation/
+  AGENTS.md Actors section; README's 'Robotics premise' -- a documentation/
   logistics-coordination robot performs license-application intake, case-
   record filing, review-appointment scheduling and office-supply
   coordination under this advisor/governor pair, which never dispatches
